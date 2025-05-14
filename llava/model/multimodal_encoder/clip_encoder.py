@@ -7,7 +7,7 @@ from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
 class CLIPVisionTower(nn.Module):
     def __init__(self, vision_tower, args, delay_load=False):
         super().__init__()
-
+        print("CLIPVisionTower::init")
         self.is_loaded = False
 
         self.vision_tower_name = vision_tower
@@ -20,6 +20,7 @@ class CLIPVisionTower(nn.Module):
             self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
 
     def load_model(self):
+        print("CLIPVisionTower::load_model")
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
         self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name)
         self.vision_tower.requires_grad_(False)
@@ -27,6 +28,7 @@ class CLIPVisionTower(nn.Module):
         self.is_loaded = True
 
     def feature_select(self, image_forward_outs):
+        print("CLIPVisionTower::feature_select")
         image_features = image_forward_outs.hidden_states[self.select_layer]
         if self.select_feature == 'patch':
             image_features = image_features[:, 1:]
@@ -36,8 +38,9 @@ class CLIPVisionTower(nn.Module):
             raise ValueError(f'Unexpected select feature: {self.select_feature}')
         return image_features
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward(self, images):
+        print("CLIPVisionTower::forward")
         if type(images) is list:
             image_features = []
             for image in images:

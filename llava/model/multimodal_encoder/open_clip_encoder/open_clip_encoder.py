@@ -8,6 +8,14 @@ from timm.models.vision_transformer import VisionTransformer
 from transformers.modeling_outputs import BaseModelOutput
 
 from .utils import from_pretrained, remove_transformer_pooler_weights
+from torch.nn.functional import softmax
+
+import os
+import cv2
+import numpy as np
+import torch.nn.functional as F
+from llava.model.utils import save_attention
+
 
 LLAVARAD_HF_REPO = "microsoft/llava-rad"
 
@@ -15,12 +23,36 @@ class VisionTower(torch.nn.Module):
 
     def __init__(self, vit: VisionTransformer) -> None:
         super().__init__()
+        print("VisionTower::init")
         self.vit = vit
         self.hidden_size = vit.embed_dim
         self.num_patches = vit.patch_embed.num_patches
 
-    @torch.no_grad()
-    def forward(self, images, output_hidden_states=True):
+        self.attention_maps = []  # Stores attention maps for all layers/heads
+        self.num_heads = 12
+
+        # Register hook for each attention layer
+        for block in self.vit.blocks:
+            block.attn.qkv.register_forward_hook(self.forward_hook)
+
+
+    def forward_hook(self, module, input, output):
+        # Output shape: [batch, heads, seq_len, seq_len]
+        # q, k, v = output.chunk(3, dim=-1)  # Split into q, k, v
+        B, N, C = input[0].shape
+        print("Input shape ", input[0].shape)
+        q, k, v = output.reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4) # Split into q, k, v
+        attn = (q @ k.transpose(-2, -1)) * (q.shape[-1] ** -0.5)  # Scaled dot-product
+        attn = softmax(attn, dim=-1)  # [batch, heads, seq_len, seq_len]
+        self.attention_maps.append(attn.detach().cpu())
+        
+    
+
+
+    # @torch.no_grad()
+    def forward(self, images, output_hidden_states=True, image_name=None):
+        print("VisionTower::forward")
+        print("Imagename : ", image_name)
         hidden_states = self.vit.patch_embed(images)
         hidden_states = self.vit._pos_embed(hidden_states)
         hidden_states = self.vit.norm_pre(hidden_states)
@@ -28,6 +60,9 @@ class VisionTower(torch.nn.Module):
         for block in self.vit.blocks:
             hidden_states = block(hidden_states)
             block_states.append(hidden_states)
+        print("VisionTower::forward", len(self.attention_maps), self.attention_maps[0].shape)   
+
+        save_attention(image_name, images, self.attention_maps)
         if output_hidden_states:
             return BaseModelOutput(
                 last_hidden_state=hidden_states, hidden_states=block_states
@@ -50,7 +85,7 @@ class Processor:
 class OpenCLIPVisionTower(torch.nn.Module):
     def __init__(self, vision_tower, args, delay_load=False, vision_tower_config=None, vision_tower_checkpoint=None):
         super().__init__()
-
+        print("OpenCLIPVisionTower::forward")
         self.is_loaded = False
 
         self.vision_tower_name = vision_tower
@@ -72,6 +107,7 @@ class OpenCLIPVisionTower(torch.nn.Module):
             self.cfg_only = vision_tower
         
     def load_model(self):
+        print("OpenCLIPVisionTower::load_model")
         if self.vision_tower_checkpoint:
             if not os.path.exists(self.vision_tower_checkpoint):
                 print("Loading vision tower from HF Hub")
@@ -95,7 +131,9 @@ class OpenCLIPVisionTower(torch.nn.Module):
         self.is_loaded = True
 
     def feature_select(self, image_forward_outs):
+        print("OpenCLIPVisionTower::feature_select")
         image_features = image_forward_outs.hidden_states[self.select_layer]
+        
         if self.select_feature == 'patch':
             image_features = image_features[:, 1:]
         elif self.select_feature == 'cls_patch':
@@ -104,8 +142,10 @@ class OpenCLIPVisionTower(torch.nn.Module):
             raise ValueError(f'Unexpected select feature: {self.select_feature}')
         return image_features
 
-    @torch.no_grad()
-    def forward(self, images):
+
+    # @torch.no_grad()
+    def forward(self, images, image_name=None):
+        print("OpenCLIPVisionTower::forward")
         if type(images) is list:
             image_features = []
             for image in images:
@@ -113,7 +153,7 @@ class OpenCLIPVisionTower(torch.nn.Module):
                 image_feature = self.feature_select(image_forward_out).to(image.dtype)
                 image_features.append(image_feature)
         else:
-            image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
+            image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True, image_name=image_name)
             image_features = self.feature_select(image_forward_outs).to(images.dtype)
 
         return image_features

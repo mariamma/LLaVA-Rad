@@ -35,10 +35,12 @@ class LlavaMPTModel(LlavaMetaModel, MPTModel):
     config_class = LlavaMPTConfig
 
     def __init__(self, config: MPTConfig):
+        print("LlavaMPTModel::init")
         config.hidden_size = config.d_model
         super(LlavaMPTModel, self).__init__(config)
     
     def embed_tokens(self, x):
+        print("LlavaMPTModel::embed_tokens")
         return self.wte(x)
 
 
@@ -47,6 +49,7 @@ class LlavaMPTForCausalLM(MPTForCausalLM, LlavaMetaForCausalLM):
     supports_gradient_checkpointing = True
 
     def __init__(self, config):
+        print("LlavaMPTForCausalLM::init")
         super(MPTForCausalLM, self).__init__(config)
 
         if not config.tie_word_embeddings:
@@ -63,13 +66,16 @@ class LlavaMPTForCausalLM(MPTForCausalLM, LlavaMetaForCausalLM):
             self.logit_scale = logit_scale
 
     def get_model(self):
+        print("LlavaMPTForCausalLM::get_model")
         return self.transformer
 
     def _set_gradient_checkpointing(self, module, value=False):
+        print("LlavaMPTForCausalLM::_set_gradient_checkpointing")
         if isinstance(module, LlavaMPTModel):
             module.gradient_checkpointing = value
 
     def forward(self, input_ids: torch.LongTensor, past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None, attention_mask: Optional[torch.ByteTensor]=None, prefix_mask: Optional[torch.ByteTensor]=None, sequence_id: Optional[torch.LongTensor]=None, labels: Optional[torch.LongTensor]=None, return_dict: Optional[bool]=None, output_attentions: Optional[bool]=None, output_hidden_states: Optional[bool]=None, use_cache: Optional[bool]=None, images=None):
+        print("LlavaMPTForCausalLM::forward")
         return_dict = return_dict if return_dict is not None else self.config.return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
@@ -89,6 +95,7 @@ class LlavaMPTForCausalLM(MPTForCausalLM, LlavaMetaForCausalLM):
         return CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=outputs.past_key_values, hidden_states=outputs.hidden_states)
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
+        print("LlavaMPTForCausalLM::prepare_inputs_for_generation")
         if inputs_embeds is not None:
             raise NotImplementedError('inputs_embeds is not implemented for MPT yet')
         attention_mask = kwargs['attention_mask'].bool()

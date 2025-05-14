@@ -11,6 +11,7 @@ from llava.model.utils import auto_upgrade
 
 
 def make_delta(base_model_path, target_model_path, delta_path, hub_repo_id):
+    print("Funciton make_delta")
     print("Loading base model")
     base = AutoModelForCausalLM.from_pretrained(
         base_model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True)
