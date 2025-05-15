@@ -130,8 +130,10 @@ def eval_model(
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         
 
+        
         # with torch.inference_mode():
-        batch_output_ids = model.generate(
+        with torch.cuda.amp.autocast():
+            batch_output_ids = model.generate(
                 torch.stack(batch_input_ids).cuda(),
                 images=torch.stack(batch_images).half().cuda(),
                 do_sample=True if temperature > 0 else False,
@@ -143,7 +145,7 @@ def eval_model(
                 output_attentions=True,
                 image_name=query["image"]).cpu()
 
-        batch_outputs = tokenizer.batch_decode(
+            batch_outputs = tokenizer.batch_decode(
                 batch_output_ids[:, len(batch_input_ids[0]):], skip_special_tokens=True
             )
 

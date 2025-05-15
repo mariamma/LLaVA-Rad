@@ -58,7 +58,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
     def inithook(self):
         for layer in self.model.layers:
-            # layer.self_attn.register_forward_hook(self.save_attention_weights)
+            layer.self_attn.register_forward_hook(self.save_attention_weights)
             layer.self_attn.register_backward_hook(self.save_attention_gradients)
     
 
@@ -71,10 +71,16 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         return self.image_name
     
     def save_attention_gradients(self, module, grad_input, grad_output):
+        print("Gradients reveived: ", grad_output[0].shape)
         self.attention_gradients.append(grad_output[0].detach())
+        grad_output[1].requires_grad_(True)
+        grad_output[1].retain_grad()
 
     def save_attention_weights(self, module, input, output):
-        self.attention_weights.append(output)     
+        output[0].requires_grad_(True)
+        output[0].retain_grad()
+        # print("Attention weights: ", len(output), output[0].shape)
+        # self.attention_weights.append(output[0])     
 
 
     def forward(
@@ -92,6 +98,10 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         image_name: Optional[str] = None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         print("LlavaLlamaForCausalLM::forward")
+
+        if images != None:
+            images.requires_grad_(True)
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -100,35 +110,49 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
         input_ids, attention_mask, past_key_values, inputs_embeds, labels, img_index = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images, image_name)
 
+        if inputs_embeds != None:
+            inputs_embeds.requires_grad_(True)  
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict
-        )
+        with torch.set_grad_enabled(True):
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict
+            )
         print("Output attention : ", len(outputs.attentions), outputs.attentions[0].shape)
-
-        if input_ids==None:
-            self.image_token_start, self.image_token_len = img_index
-            print("image_token_start, image_token_len: ", self.image_token_start, self.image_token_len)
-            save_attention("decoder"+image_name, images, outputs.attentions, self.image_token_start, self.image_token_len)    
-        else:
-            input_ids = str(input_ids[0][0].detach().cpu().numpy())
-            save_word_attention("decoder"+ input_ids +image_name, images, outputs.attentions, self.image_token_start, self.image_token_len)    
-
+        print("Outputs : ", len(outputs), outputs[0].shape)    
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
-        print("Logits : ", logits.shape)
-        logits.backward()
+        print("Logits : ", logits.shape, logits.sum())
 
-        for grads in self.attention_gradients:
-            print("Grads :", grads.shape)
+        if input_ids!=None:        
+            # Compute loss and backpropagate to get gradients on attention weights
+            self.model.zero_grad()
+            token_id_one_hot = torch.nn.functional.one_hot(input_ids[0][0], num_classes=logits.size(-1)).float()
+            token_id_one_hot = token_id_one_hot.view(1, 1, -1)
+            token_id_one_hot.requires_grad_(True)
+            print("Token id : ", token_id_one_hot.shape)
+
+            logits.backward(gradient=token_id_one_hot, retain_graph=True)
+            # logits.backward()
+            
+            # for att in self.attention_weights:
+            #     print("Grads :", att.grad.float().detach())
+            
+
+        #     input_ids_str = str(input_ids[0][0].detach().cpu().numpy())
+        #     save_word_attention("decoder"+ input_ids_str +image_name, images, outputs.attentions, self.image_token_start, self.image_token_len)    
+        # else:
+            # self.image_token_start, self.image_token_len = img_index
+            # print("image_token_start, image_token_len: ", self.image_token_start, self.image_token_len)
+            # save_attention("decoder"+image_name, images, outputs.attentions, self.image_token_start, self.image_token_len)   
+
 
         loss = None
         if labels is not None:
@@ -155,6 +179,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+    
 
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
